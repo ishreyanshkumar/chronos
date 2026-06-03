@@ -5,9 +5,9 @@
 // Core Limit Order Book (LOB) engine.
 //
 // Data structures:
-//   • Bids: std::map<Price, PriceLevel, std::greater<>> – highest price first.
-//   • Asks: std::map<Price, PriceLevel>                 – lowest price first.
-//   • id_map_: unordered_map for O(1) order lookup by ID (cancel / partial).
+//   • Bids: Dense flat array (std::vector<PriceLevel>) for O(1) lookup.
+//   • Asks: Dense flat array (std::vector<PriceLevel>) for O(1) lookup.
+//   • id_map_: Dense flat array (std::vector<Order*>) for O(1) lookup by ID.
 //
 // Memory: all Order objects live in a pre-faulted MemoryArena – the STL maps
 // only hold PriceLevel values (small structs, not heap-allocated per order).
