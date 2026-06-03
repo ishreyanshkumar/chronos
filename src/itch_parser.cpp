@@ -146,7 +146,37 @@ std::size_t ITCHParser::ParseMessage(const uint8_t* buf, std::size_t len,
 std::size_t ITCHParser::ParseFile(const std::string& path,
                                    const ITCHCallbacks& cbs) {
 #ifdef _WIN32
-    throw std::runtime_error("ITCHParser::ParseFile not implemented for Windows yet.");
+    HANDLE hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) throw std::runtime_error("Cannot open ITCH file: " + path);
+
+    LARGE_INTEGER li;
+    if (!GetFileSizeEx(hFile, &li)) { CloseHandle(hFile); throw std::runtime_error("Cannot get size"); }
+    const std::size_t file_size = static_cast<std::size_t>(li.QuadPart);
+    if (file_size == 0) { CloseHandle(hFile); return 0; }
+
+    HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+    if (!hMap) { CloseHandle(hFile); throw std::runtime_error("CreateFileMapping failed"); }
+
+    void* raw = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
+    if (!raw) { CloseHandle(hMap); CloseHandle(hFile); throw std::runtime_error("MapViewOfFile failed"); }
+
+    const auto* buf = reinterpret_cast<const uint8_t*>(raw);
+    std::size_t pos = 0;
+    std::size_t count = 0;
+
+    while (pos + 2 <= file_size) {
+        uint16_t msg_len = (uint16_t(buf[pos]) << 8) | buf[pos + 1];
+        pos += 2;
+        if (pos + msg_len > file_size) break;
+        ParseMessage(buf + pos, msg_len, cbs);
+        pos += msg_len;
+        ++count;
+    }
+
+    UnmapViewOfFile(raw);
+    CloseHandle(hMap);
+    CloseHandle(hFile);
+    return count;
 #else
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) throw std::runtime_error("Cannot open ITCH file: " + path);

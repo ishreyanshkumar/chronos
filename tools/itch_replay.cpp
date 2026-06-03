@@ -22,7 +22,8 @@ static void usage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
-    if (argc < 2) { usage(argv[0]); return 1; }
+    try {
+        if (argc < 2) { usage(argv[0]); return 1; }
 
     const std::string path = argv[1];
     std::optional<std::string> symbol;
@@ -77,9 +78,9 @@ int main(int argc, char* argv[]) {
     std::printf("File    : %s\n", path.c_str());
     std::printf("Symbol  : %s\n", symbol ? symbol->c_str() : "(all)");
     std::printf("Total   : %zu messages\n", total);
-    std::printf("Adds    : %lu\n", adds);
-    std::printf("Cancels : %lu\n", dels);
-    std::printf("Fills   : %lu\n", fills);
+    std::printf("Adds    : %llu\n", (unsigned long long)adds);
+    std::printf("Cancels : %llu\n", (unsigned long long)dels);
+    std::printf("Fills   : %llu\n", (unsigned long long)fills);
     std::printf("Resting : %zu orders\n", book.OrderCount());
     std::printf("Elapsed : %.3f s  (%.2f M msgs/s)\n",
                 elapsed, static_cast<double>(total) / elapsed / 1e6);
@@ -90,4 +91,8 @@ int main(int argc, char* argv[]) {
     if (ask) std::printf("Best Ask: $%.4f\n", static_cast<double>(*ask) / 10000.0);
 
     return 0;
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "Error: %s\n", e.what());
+        return 1;
+    }
 }
