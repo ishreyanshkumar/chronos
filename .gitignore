@@ -1,0 +1,11 @@
+build/
+.cache/
+data/
+bench_out.txt
+*.exe
+*.o
+*.a
+*.obj
+*.suo
+.vs/
+.vscode/
