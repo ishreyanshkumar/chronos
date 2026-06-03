@@ -1,0 +1,986 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="406" onload="init(evt)" viewBox="0 0 1200 406" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="406.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Flame Graph</text>
+<text id="details" x="10.00" y="389" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="389" > </text>
+<g id="frames">
+<g >
+<title>std::__cxx11::_List_base&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt;::_M_put_node (491,431,656 samples, 10.79%)</title><rect x="737.2" y="165" width="127.3" height="15.0" fill="rgb(217,58,13)" rx="2" ry="2" />
+<text  x="740.21" y="175.5" >std::__cxx11::_..</text>
+</g>
+<g >
+<title>arena_for_chunk (4,490,738 samples, 0.10%)</title><rect x="765.9" y="85" width="1.2" height="15.0" fill="rgb(252,216,51)" rx="2" ry="2" />
+<text  x="768.89" y="95.5" ></text>
+</g>
+<g >
+<title>_M_bucket_index (17,589,876 samples, 0.39%)</title><rect x="286.1" y="165" width="4.6" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="289.13" y="175.5" ></text>
+</g>
+<g >
+<title>_M_bucket_index (8,797,975 samples, 0.19%)</title><rect x="364.4" y="133" width="2.3" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="367.45" y="143.5" ></text>
+</g>
+<g >
+<title>__libc_malloc2 (332,714,553 samples, 7.30%)</title><rect x="412.2" y="85" width="86.2" height="15.0" fill="rgb(218,61,14)" rx="2" ry="2" />
+<text  x="415.19" y="95.5" >__libc_mal..</text>
+</g>
+<g >
+<title>allocate (488,113,291 samples, 10.71%)</title><rect x="535.5" y="117" width="126.4" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="538.47" y="127.5" >allocate</text>
+</g>
+<g >
+<title>deallocate (378,953,605 samples, 8.32%)</title><rect x="1051.3" y="117" width="98.2" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="1054.33" y="127.5" >deallocate</text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;std::_List_node&lt;STLOrder&gt; &gt; &gt;::deallocate (491,431,656 samples, 10.79%)</title><rect x="737.2" y="149" width="127.3" height="15.0" fill="rgb(239,159,38)" rx="2" ry="2" />
+<text  x="740.21" y="159.5" >std::allocator_..</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::_M_get_previous_node (90,979,194 samples, 2.00%)</title><rect x="1159.6" y="165" width="23.6" height="15.0" fill="rgb(222,79,19)" rx="2" ry="2" />
+<text  x="1162.60" y="175.5" >s..</text>
+</g>
+<g >
+<title>_int_free_create_chunk (46,374,231 samples, 1.02%)</title><rect x="1125.9" y="37" width="12.0" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="1128.89" y="47.5" ></text>
+</g>
+<g >
+<title>unlink_chunk (26,649,980 samples, 0.58%)</title><rect x="1139.1" y="37" width="6.9" height="15.0" fill="rgb(236,146,34)" rx="2" ry="2" />
+<text  x="1142.09" y="47.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt;::empty (4,629,605 samples, 0.10%)</title><rect x="733.7" y="213" width="1.2" height="15.0" fill="rgb(225,94,22)" rx="2" ry="2" />
+<text  x="736.65" y="223.5" ></text>
+</g>
+<g >
+<title>_M_find_before_node (81,066,589 samples, 1.78%)</title><rect x="290.7" y="165" width="21.0" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="293.69" y="175.5" ></text>
+</g>
+<g >
+<title>construct&lt;STLOrder, STLOrder&gt; (49,007,667 samples, 1.08%)</title><rect x="661.9" y="165" width="12.7" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="664.90" y="175.5" ></text>
+</g>
+<g >
+<title>__libc_malloc (13,619,992 samples, 0.30%)</title><rect x="653.9" y="69" width="3.6" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="656.95" y="79.5" ></text>
+</g>
+<g >
+<title>_M_bucket_index (8,797,975 samples, 0.19%)</title><rect x="364.4" y="149" width="2.3" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="367.45" y="159.5" ></text>
+</g>
+<g >
+<title>allocate (488,113,291 samples, 10.71%)</title><rect x="535.5" y="101" width="126.4" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="538.47" y="111.5" >allocate</text>
+</g>
+<g >
+<title>operator (8,797,975 samples, 0.19%)</title><rect x="364.4" y="117" width="2.3" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="367.45" y="127.5" ></text>
+</g>
+<g >
+<title>arena_for_chunk (4,496,899 samples, 0.10%)</title><rect x="1066.3" y="53" width="1.1" height="15.0" fill="rgb(252,216,51)" rx="2" ry="2" />
+<text  x="1069.28" y="63.5" ></text>
+</g>
+<g >
+<title>_M_rehash (41,999,833 samples, 0.92%)</title><rect x="366.7" y="165" width="10.9" height="15.0" fill="rgb(236,145,34)" rx="2" ry="2" />
+<text  x="369.73" y="175.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Mod_range_hashing::operator (39,054,954 samples, 0.86%)</title><rect x="1149.5" y="133" width="10.1" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="1152.48" y="143.5" ></text>
+</g>
+<g >
+<title>BM_Baseline_STL (4,546,814,461 samples, 99.80%)</title><rect x="10.0" y="245" width="1177.7" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="13.00" y="255.5" >BM_Baseline_STL</text>
+</g>
+<g >
+<title>all (4,555,762,051 samples, 100%)</title><rect x="10.0" y="357" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="367.5" ></text>
+</g>
+<g >
+<title>allocate (437,982,623 samples, 9.61%)</title><rect x="384.9" y="149" width="113.5" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="387.92" y="159.5" >allocate</text>
+</g>
+<g >
+<title>free@plt (3,318,124 samples, 0.07%)</title><rect x="857.9" y="101" width="0.8" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
+<text  x="860.85" y="111.5" ></text>
+</g>
+<g >
+<title>equal_range (4,463,082 samples, 0.10%)</title><rect x="677.4" y="181" width="1.2" height="15.0" fill="rgb(245,188,45)" rx="2" ry="2" />
+<text  x="680.43" y="191.5" ></text>
+</g>
+<g >
+<title>__libc_malloc (31,681,427 samples, 0.70%)</title><rect x="404.0" y="85" width="8.2" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="406.98" y="95.5" ></text>
+</g>
+<g >
+<title>_S_left (387,206,339 samples, 8.50%)</title><rect x="163.1" y="149" width="100.3" height="15.0" fill="rgb(241,168,40)" rx="2" ry="2" />
+<text  x="166.12" y="159.5" >_S_left</text>
+</g>
+<g >
+<title>std::_Rb_tree&lt;unsigned long, std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt;, std::_Select1st&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt;, std::greater&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt; &gt;::lower_bound (603,367,610 samples, 13.24%)</title><rect x="889.4" y="181" width="156.2" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="892.36" y="191.5" >std::_Rb_tree&lt;unsign..</text>
+</g>
+<g >
+<title>construct&lt;std::pair&lt;long unsigned int const, std::_List_iterator&lt;STLOrder&gt; &gt;, const std::piecewise_construct_t&amp;, std::tuple&lt;long unsigned int const&amp;&gt;, std::tuple&lt;&gt; &gt; (22,161,604 samples, 0.49%)</title><rect x="498.4" y="149" width="5.7" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="501.36" y="159.5" ></text>
+</g>
+<g >
+<title>_M_erase_aux (4,287,579 samples, 0.09%)</title><rect x="676.3" y="165" width="1.1" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="679.32" y="175.5" ></text>
+</g>
+<g >
+<title>construct_at&lt;STLOrder, STLOrder&gt; (49,007,667 samples, 1.08%)</title><rect x="661.9" y="149" width="12.7" height="15.0" fill="rgb(251,214,51)" rx="2" ry="2" />
+<text  x="664.90" y="159.5" ></text>
+</g>
+<g >
+<title>std::map&lt;unsigned long, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt;, std::greater&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt; &gt;::lower_bound (603,367,610 samples, 13.24%)</title><rect x="889.4" y="197" width="156.2" height="15.0" fill="rgb(233,131,31)" rx="2" ry="2" />
+<text  x="892.36" y="207.5" >std::map&lt;unsigned lo..</text>
+</g>
+<g >
+<title>_M_bucket_index (17,589,876 samples, 0.39%)</title><rect x="286.1" y="181" width="4.6" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="289.13" y="191.5" ></text>
+</g>
+<g >
+<title>_M_key_equals (22,313,439 samples, 0.49%)</title><rect x="707.0" y="133" width="5.8" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="709.97" y="143.5" ></text>
+</g>
+<g >
+<title>operator[] (1,854,082,142 samples, 40.70%)</title><rect x="23.9" y="213" width="480.2" height="15.0" fill="rgb(216,50,12)" rx="2" ry="2" />
+<text  x="26.87" y="223.5" >operator[]</text>
+</g>
+<g >
+<title>pair&lt;long unsigned int const&amp;&gt; (22,161,604 samples, 0.49%)</title><rect x="498.4" y="117" width="5.7" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="501.36" y="127.5" ></text>
+</g>
+<g >
+<title>find (131,900,707 samples, 2.90%)</title><rect x="678.6" y="213" width="34.2" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
+<text  x="681.59" y="223.5" >find</text>
+</g>
+<g >
+<title>_S_right (26,653,503 samples, 0.59%)</title><rect x="263.4" y="149" width="6.9" height="15.0" fill="rgb(248,201,48)" rx="2" ry="2" />
+<text  x="266.41" y="159.5" ></text>
+</g>
+<g >
+<title>construct_at&lt;std::pair&lt;long unsigned int const, std::_List_iterator&lt;STLOrder&gt; &gt;, const std::piecewise_construct_t&amp;, std::tuple&lt;long unsigned int const&amp;&gt;, std::tuple&lt;&gt; &gt; (22,161,604 samples, 0.49%)</title><rect x="498.4" y="133" width="5.7" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="501.36" y="143.5" ></text>
+</g>
+<g >
+<title>CancelOrder (140,651,368 samples, 3.09%)</title><rect x="676.3" y="229" width="36.5" height="15.0" fill="rgb(222,79,18)" rx="2" ry="2" />
+<text  x="679.32" y="239.5" >Can..</text>
+</g>
+<g >
+<title>find (131,900,707 samples, 2.90%)</title><rect x="678.6" y="197" width="34.2" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
+<text  x="681.59" y="207.5" >find</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::erase (530,950,780 samples, 11.65%)</title><rect x="1045.6" y="181" width="137.6" height="15.0" fill="rgb(225,94,22)" rx="2" ry="2" />
+<text  x="1048.64" y="191.5" >std::_Hashtable&lt;u..</text>
+</g>
+<g >
+<title>_Scoped_node&lt;const std::piecewise_construct_t&amp;, std::tuple&lt;long unsigned int const&amp;&gt;, std::tuple&lt;&gt; &gt; (460,144,227 samples, 10.10%)</title><rect x="384.9" y="181" width="119.2" height="15.0" fill="rgb(238,156,37)" rx="2" ry="2" />
+<text  x="387.92" y="191.5" >_Scoped_node&lt;c..</text>
+</g>
+<g >
+<title>operator (43,169,250 samples, 0.95%)</title><rect x="679.8" y="133" width="11.2" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="682.79" y="143.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Prime_rehash_policy::_M_need_rehash (28,240,125 samples, 0.62%)</title><rect x="377.6" y="165" width="7.3" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="380.61" y="175.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::find (17,460,920 samples, 0.38%)</title><rect x="1183.2" y="197" width="4.5" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="1186.16" y="207.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;unsigned long, std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt;, std::__detail::_Select1st, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, false&gt;::_M_bucket_index (39,054,954 samples, 0.86%)</title><rect x="1149.5" y="149" width="10.1" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="1152.48" y="159.5" ></text>
+</g>
+<g >
+<title>operator (15,556,872 samples, 0.34%)</title><rect x="368.2" y="133" width="4.1" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="371.22" y="143.5" ></text>
+</g>
+<g >
+<title>_M_locate (131,900,707 samples, 2.90%)</title><rect x="678.6" y="181" width="34.2" height="15.0" fill="rgb(206,5,1)" rx="2" ry="2" />
+<text  x="681.59" y="191.5" >_M..</text>
+</g>
+<g >
+<title>_M_equals (22,313,439 samples, 0.49%)</title><rect x="707.0" y="149" width="5.8" height="15.0" fill="rgb(233,130,31)" rx="2" ry="2" />
+<text  x="709.97" y="159.5" ></text>
+</g>
+<g >
+<title>_int_free_chunk (303,272,381 samples, 6.66%)</title><rect x="1067.4" y="69" width="78.6" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="1070.44" y="79.5" >_int_free..</text>
+</g>
+<g >
+<title>checked_request2size (13,619,992 samples, 0.30%)</title><rect x="653.9" y="53" width="3.6" height="15.0" fill="rgb(252,219,52)" rx="2" ry="2" />
+<text  x="656.95" y="63.5" ></text>
+</g>
+<g >
+<title>allocate (488,113,291 samples, 10.71%)</title><rect x="535.5" y="133" width="126.4" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="538.47" y="143.5" >allocate</text>
+</g>
+<g >
+<title>lower_bound (941,258,683 samples, 20.66%)</title><rect x="42.3" y="197" width="243.8" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="45.33" y="207.5" >lower_bound</text>
+</g>
+<g >
+<title>operator delete (22,351,046 samples, 0.49%)</title><rect x="858.7" y="101" width="5.8" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
+<text  x="861.71" y="111.5" ></text>
+</g>
+<g >
+<title>_int_free_maybe_trim (115,351,931 samples, 2.53%)</title><rect x="1076.7" y="53" width="29.9" height="15.0" fill="rgb(254,226,54)" rx="2" ry="2" />
+<text  x="1079.74" y="63.5" >_i..</text>
+</g>
+<g >
+<title>DoNIterations (4,546,814,461 samples, 99.80%)</title><rect x="10.0" y="293" width="1177.7" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="13.00" y="303.5" >DoNIterations</text>
+</g>
+<g >
+<title>std::__detail::_List_node_base::_M_hook (6,679,676 samples, 0.15%)</title><rect x="674.6" y="181" width="1.7" height="15.0" fill="rgb(244,179,42)" rx="2" ry="2" />
+<text  x="677.59" y="191.5" ></text>
+</g>
+<g >
+<title>_M_create_node&lt;STLOrder&gt; (537,120,958 samples, 11.79%)</title><rect x="535.5" y="181" width="139.1" height="15.0" fill="rgb(252,219,52)" rx="2" ry="2" />
+<text  x="538.47" y="191.5" >_M_create_node&lt;ST..</text>
+</g>
+<g >
+<title>std::__cxx11::_List_base&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt;::_M_destroy_node (491,431,656 samples, 10.79%)</title><rect x="737.2" y="181" width="127.3" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="740.21" y="191.5" >std::__cxx11::_..</text>
+</g>
+<g >
+<title>operator delete (13,463,757 samples, 0.30%)</title><rect x="1146.0" y="69" width="3.5" height="15.0" fill="rgb(247,196,46)" rx="2" ry="2" />
+<text  x="1148.99" y="79.5" ></text>
+</g>
+<g >
+<title>_M_insert&lt;STLOrder&gt; (664,899,470 samples, 14.59%)</title><rect x="504.1" y="197" width="172.2" height="15.0" fill="rgb(229,111,26)" rx="2" ry="2" />
+<text  x="507.10" y="207.5" >_M_insert&lt;STLOrder&gt;</text>
+</g>
+<g >
+<title>Run (4,546,814,461 samples, 99.80%)</title><rect x="10.0" y="261" width="1177.7" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="13.00" y="271.5" >Run</text>
+</g>
+<g >
+<title>LimitOrderBookSTL::CancelOrder (1,815,583,813 samples, 39.85%)</title><rect x="717.4" y="229" width="470.3" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="720.42" y="239.5" >LimitOrderBookSTL::CancelOrder</text>
+</g>
+<g >
+<title>_M_insert_bucket_begin (157,517,086 samples, 3.46%)</title><rect x="325.9" y="165" width="40.8" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="328.93" y="175.5" >_M_..</text>
+</g>
+<g >
+<title>_M_bucket_index (47,803,674 samples, 1.05%)</title><rect x="678.6" y="165" width="12.4" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="681.59" y="175.5" ></text>
+</g>
+<g >
+<title>RunInThread (4,546,814,461 samples, 99.80%)</title><rect x="10.0" y="277" width="1177.7" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="13.00" y="287.5" >RunInThread</text>
+</g>
+<g >
+<title>_int_free_chunk (350,538,857 samples, 7.69%)</title><rect x="767.1" y="101" width="90.8" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="770.06" y="111.5" >_int_free_..</text>
+</g>
+<g >
+<title>std::allocator&lt;std::_List_node&lt;STLOrder&gt; &gt;::deallocate (491,431,656 samples, 10.79%)</title><rect x="737.2" y="133" width="127.3" height="15.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="740.21" y="143.5" >std::allocator&lt;..</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::_M_bucket_index (39,054,954 samples, 0.86%)</title><rect x="1149.5" y="165" width="10.1" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="1152.48" y="175.5" ></text>
+</g>
+<g >
+<title>erase (8,750,661 samples, 0.19%)</title><rect x="676.3" y="213" width="2.3" height="15.0" fill="rgb(252,219,52)" rx="2" ry="2" />
+<text  x="679.32" y="223.5" ></text>
+</g>
+<g >
+<title>std::_Rb_tree&lt;unsigned long, std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt;, std::_Select1st&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt;, std::greater&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt; &gt;::_M_lower_bound (594,429,210 samples, 13.05%)</title><rect x="891.7" y="165" width="153.9" height="15.0" fill="rgb(253,225,53)" rx="2" ry="2" />
+<text  x="894.67" y="175.5" >std::_Rb_tree&lt;unsig..</text>
+</g>
+<g >
+<title>alloc_perturb (9,065,849 samples, 0.20%)</title><rect x="651.6" y="37" width="2.3" height="15.0" fill="rgb(234,134,32)" rx="2" ry="2" />
+<text  x="654.60" y="47.5" ></text>
+</g>
+<g >
+<title>DoOneRepetition (4,546,814,461 samples, 99.80%)</title><rect x="10.0" y="309" width="1177.7" height="15.0" fill="rgb(242,174,41)" rx="2" ry="2" />
+<text  x="13.00" y="319.5" >DoOneRepetition</text>
+</g>
+<g >
+<title>deallocate (378,953,605 samples, 8.32%)</title><rect x="1051.3" y="85" width="98.2" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="1054.33" y="95.5" >deallocate</text>
+</g>
+<g >
+<title>LimitOrderBookSTL::AddOrder (18,037,355 samples, 0.40%)</title><rect x="712.8" y="229" width="4.6" height="15.0" fill="rgb(216,53,12)" rx="2" ry="2" />
+<text  x="715.75" y="239.5" ></text>
+</g>
+<g >
+<title>__allocate_guarded&lt;std::allocator&lt;std::_List_node&lt;STLOrder&gt; &gt; &gt; (488,113,291 samples, 10.71%)</title><rect x="535.5" y="149" width="126.4" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="538.47" y="159.5" >__allocate_guar..</text>
+</g>
+<g >
+<title>_M_erase_aux (4,287,579 samples, 0.09%)</title><rect x="676.3" y="181" width="1.1" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="679.32" y="191.5" ></text>
+</g>
+<g >
+<title>_M_allocate_node&lt;const std::piecewise_construct_t&amp;, std::tuple&lt;long unsigned int const&amp;&gt;, std::tuple&lt;&gt; &gt; (460,144,227 samples, 10.10%)</title><rect x="384.9" y="165" width="119.2" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="387.92" y="175.5" >_M_allocate_no..</text>
+</g>
+<g >
+<title>erase (8,750,661 samples, 0.19%)</title><rect x="676.3" y="197" width="2.3" height="15.0" fill="rgb(252,219,52)" rx="2" ry="2" />
+<text  x="679.32" y="207.5" ></text>
+</g>
+<g >
+<title>allocate (437,982,623 samples, 9.61%)</title><rect x="384.9" y="117" width="113.5" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="387.92" y="127.5" >allocate</text>
+</g>
+<g >
+<title>_int_free_maybe_trim (78,166,746 samples, 1.72%)</title><rect x="781.6" y="85" width="20.2" height="15.0" fill="rgb(254,226,54)" rx="2" ry="2" />
+<text  x="784.56" y="95.5" ></text>
+</g>
+<g >
+<title>lower_bound (941,258,683 samples, 20.66%)</title><rect x="42.3" y="181" width="243.8" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="45.33" y="191.5" >lower_bound</text>
+</g>
+<g >
+<title>_int_malloc (4,306,446 samples, 0.09%)</title><rect x="1187.7" y="309" width="1.1" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="1190.68" y="319.5" ></text>
+</g>
+<g >
+<title>__allocate_guarded_obj&lt;std::allocator&lt;std::_List_node&lt;STLOrder&gt; &gt; &gt; (488,113,291 samples, 10.71%)</title><rect x="535.5" y="165" width="126.4" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="538.47" y="175.5" >__allocate_guar..</text>
+</g>
+<g >
+<title>_M_erase (400,916,632 samples, 8.80%)</title><rect x="1045.6" y="165" width="103.9" height="15.0" fill="rgb(227,105,25)" rx="2" ry="2" />
+<text  x="1048.64" y="175.5" >_M_erase</text>
+</g>
+<g >
+<title>operator new (420,209,999 samples, 9.22%)</title><rect x="389.5" y="101" width="108.9" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="392.52" y="111.5" >operator new</text>
+</g>
+<g >
+<title>_M_deallocate_node_ptr (378,953,605 samples, 8.32%)</title><rect x="1051.3" y="133" width="98.2" height="15.0" fill="rgb(220,72,17)" rx="2" ry="2" />
+<text  x="1054.33" y="143.5" >_M_dealloca..</text>
+</g>
+<g >
+<title>_int_free_merge_chunk (152,034,022 samples, 3.34%)</title><rect x="1106.6" y="53" width="39.4" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="1109.61" y="63.5" >_in..</text>
+</g>
+<g >
+<title>std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt;::_M_erase (571,251,220 samples, 12.54%)</title><rect x="734.9" y="197" width="147.9" height="15.0" fill="rgb(250,211,50)" rx="2" ry="2" />
+<text  x="737.85" y="207.5" >std::__cxx11::list..</text>
+</g>
+<g >
+<title>operator (17,589,876 samples, 0.39%)</title><rect x="286.1" y="149" width="4.6" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="289.13" y="159.5" ></text>
+</g>
+<g >
+<title>free_perturb (4,572,835 samples, 0.10%)</title><rect x="1137.9" y="37" width="1.2" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="1140.90" y="47.5" ></text>
+</g>
+<g >
+<title>_M_insert_unique_node (282,757,914 samples, 6.21%)</title><rect x="311.7" y="181" width="73.2" height="15.0" fill="rgb(232,126,30)" rx="2" ry="2" />
+<text  x="314.68" y="191.5" >_M_inser..</text>
+</g>
+<g >
+<title>_M_lower_bound (941,258,683 samples, 20.66%)</title><rect x="42.3" y="165" width="243.8" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="45.33" y="175.5" >_M_lower_bound</text>
+</g>
+<g >
+<title>std::unordered_map&lt;unsigned long, std::_List_iterator&lt;STLOrder&gt;, std::hash&lt;unsigned long&gt;, std::equal_to&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt; &gt;::find (17,460,920 samples, 0.38%)</title><rect x="1183.2" y="213" width="4.5" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="1186.16" y="223.5" ></text>
+</g>
+<g >
+<title>deallocate (378,953,605 samples, 8.32%)</title><rect x="1051.3" y="101" width="98.2" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="1054.33" y="111.5" >deallocate</text>
+</g>
+<g >
+<title>free_perturb (13,749,893 samples, 0.30%)</title><rect x="842.6" y="69" width="3.6" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="845.61" y="79.5" ></text>
+</g>
+<g >
+<title>std::__new_allocator&lt;std::_List_node&lt;STLOrder&gt; &gt;::deallocate (491,431,656 samples, 10.79%)</title><rect x="737.2" y="117" width="127.3" height="15.0" fill="rgb(253,224,53)" rx="2" ry="2" />
+<text  x="740.21" y="127.5" >std::__new_allo..</text>
+</g>
+<g >
+<title>_int_free_create_chunk (76,475,165 samples, 1.68%)</title><rect x="822.8" y="69" width="19.8" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="825.81" y="79.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::_M_locate (17,460,920 samples, 0.38%)</title><rect x="1183.2" y="181" width="4.5" height="15.0" fill="rgb(229,110,26)" rx="2" ry="2" />
+<text  x="1186.16" y="191.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt;::erase (571,251,220 samples, 12.54%)</title><rect x="734.9" y="213" width="147.9" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="737.85" y="223.5" >std::__cxx11::list..</text>
+</g>
+<g >
+<title>__libc_free (101,432,784 samples, 2.23%)</title><rect x="740.8" y="101" width="26.3" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="743.79" y="111.5" >_..</text>
+</g>
+<g >
+<title>AddOrder (2,518,981,612 samples, 55.29%)</title><rect x="23.9" y="229" width="652.4" height="15.0" fill="rgb(220,69,16)" rx="2" ry="2" />
+<text  x="26.87" y="239.5" >AddOrder</text>
+</g>
+<g >
+<title>_M_bucket_index (15,556,872 samples, 0.34%)</title><rect x="368.2" y="149" width="4.1" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="371.22" y="159.5" ></text>
+</g>
+<g >
+<title>_int_malloc (291,550,163 samples, 6.40%)</title><rect x="578.4" y="53" width="75.5" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="581.43" y="63.5" >_int_mal..</text>
+</g>
+<g >
+<title>std::_Rb_tree&lt;unsigned long, std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt;, std::_Select1st&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt;, std::greater&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt; &gt;::_S_left (215,921,827 samples, 4.74%)</title><rect x="989.7" y="149" width="55.9" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="992.71" y="159.5" >std::..</text>
+</g>
+<g >
+<title>allocate (437,982,623 samples, 9.61%)</title><rect x="384.9" y="133" width="113.5" height="15.0" fill="rgb(206,7,1)" rx="2" ry="2" />
+<text  x="387.92" y="143.5" >allocate</text>
+</g>
+<g >
+<title>RunBenchmarks (4,546,814,461 samples, 99.80%)</title><rect x="10.0" y="325" width="1177.7" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="13.00" y="335.5" >RunBenchmarks</text>
+</g>
+<g >
+<title>operator[] (841,558,606 samples, 18.47%)</title><rect x="286.1" y="197" width="218.0" height="15.0" fill="rgb(216,50,12)" rx="2" ry="2" />
+<text  x="289.13" y="207.5" >operator[]</text>
+</g>
+<g >
+<title>push_back (664,899,470 samples, 14.59%)</title><rect x="504.1" y="213" width="172.2" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="507.10" y="223.5" >push_back</text>
+</g>
+<g >
+<title>std::_Rb_tree&lt;unsigned long, std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt;, std::_Select1st&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt;, std::greater&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt; &gt;::_M_begin (8,938,400 samples, 0.20%)</title><rect x="889.4" y="165" width="2.3" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="892.36" y="175.5" ></text>
+</g>
+<g >
+<title>_int_free_merge_chunk (216,390,102 samples, 4.75%)</title><rect x="801.8" y="85" width="56.1" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="804.80" y="95.5" >_int_..</text>
+</g>
+<g >
+<title>operator (61,062,191 samples, 1.34%)</title><rect x="270.3" y="149" width="15.8" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="273.31" y="159.5" ></text>
+</g>
+<g >
+<title>_M_deallocate_buckets (20,677,630 samples, 0.45%)</title><rect x="372.3" y="149" width="5.3" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="375.25" y="159.5" ></text>
+</g>
+<g >
+<title>_List_iterator (4,609,022 samples, 0.10%)</title><rect x="502.9" y="85" width="1.2" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="505.91" y="95.5" ></text>
+</g>
+<g >
+<title>_M_deallocate_node (378,953,605 samples, 8.32%)</title><rect x="1051.3" y="149" width="98.2" height="15.0" fill="rgb(243,177,42)" rx="2" ry="2" />
+<text  x="1054.33" y="159.5" >_M_dealloca..</text>
+</g>
+<g >
+<title>malloc@plt (17,071,874 samples, 0.37%)</title><rect x="657.5" y="69" width="4.4" height="15.0" fill="rgb(246,192,46)" rx="2" ry="2" />
+<text  x="660.48" y="79.5" ></text>
+</g>
+<g >
+<title>_M_find_node (81,066,589 samples, 1.78%)</title><rect x="290.7" y="181" width="21.0" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="293.69" y="191.5" ></text>
+</g>
+<g >
+<title>unlink_chunk (45,078,249 samples, 0.99%)</title><rect x="846.2" y="69" width="11.7" height="15.0" fill="rgb(236,146,34)" rx="2" ry="2" />
+<text  x="849.18" y="79.5" ></text>
+</g>
+<g >
+<title>__libc_malloc2 (4,306,446 samples, 0.09%)</title><rect x="1187.7" y="325" width="1.1" height="15.0" fill="rgb(218,61,14)" rx="2" ry="2" />
+<text  x="1190.68" y="335.5" ></text>
+</g>
+<g >
+<title>operator new (4,617,308 samples, 0.10%)</title><rect x="1188.8" y="325" width="1.2" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="1191.80" y="335.5" ></text>
+</g>
+<g >
+<title>std::unordered_map&lt;unsigned long, std::_List_iterator&lt;STLOrder&gt;, std::hash&lt;unsigned long&gt;, std::equal_to&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt; &gt;::erase (530,950,780 samples, 11.65%)</title><rect x="1045.6" y="213" width="137.6" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1048.64" y="223.5" >std::unordered_ma..</text>
+</g>
+<g >
+<title>std::map&lt;unsigned long, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt;, std::greater&lt;unsigned long&gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::__cxx11::list&lt;STLOrder, std::allocator&lt;STLOrder&gt; &gt; &gt; &gt; &gt;::operator[] (628,632,929 samples, 13.80%)</title><rect x="882.8" y="213" width="162.8" height="15.0" fill="rgb(234,136,32)" rx="2" ry="2" />
+<text  x="885.81" y="223.5" >std::map&lt;unsigned lo..</text>
+</g>
+<g >
+<title>bench_engine (4,555,762,051 samples, 100.00%)</title><rect x="10.0" y="341" width="1180.0" height="15.0" fill="rgb(222,81,19)" rx="2" ry="2" />
+<text  x="13.00" y="351.5" >bench_engine</text>
+</g>
+<g >
+<title>operator new (461,037,532 samples, 10.12%)</title><rect x="542.5" y="85" width="119.4" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="545.48" y="95.5" >operator new</text>
+</g>
+<g >
+<title>std::__detail::_List_node_base::_M_unhook (70,700,831 samples, 1.55%)</title><rect x="864.5" y="181" width="18.3" height="15.0" fill="rgb(227,104,24)" rx="2" ry="2" />
+<text  x="867.50" y="191.5" ></text>
+</g>
+<g >
+<title>_M_find_before_node (84,097,033 samples, 1.85%)</title><rect x="691.0" y="165" width="21.8" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="693.97" y="175.5" >_..</text>
+</g>
+<g >
+<title>_M_bucket_index (43,169,250 samples, 0.95%)</title><rect x="679.8" y="149" width="11.2" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="682.79" y="159.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;unsigned long, std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt;, std::allocator&lt;std::pair&lt;unsigned long const, std::_List_iterator&lt;STLOrder&gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;unsigned long&gt;, std::hash&lt;unsigned long&gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;false, false, true&gt; &gt;::erase (530,950,780 samples, 11.65%)</title><rect x="1045.6" y="197" width="137.6" height="15.0" fill="rgb(225,94,22)" rx="2" ry="2" />
+<text  x="1048.64" y="207.5" >std::_Hashtable&lt;u..</text>
+</g>
+<g >
+<title>__libc_free (49,124,132 samples, 1.08%)</title><rect x="1054.7" y="69" width="12.7" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="1057.72" y="79.5" ></text>
+</g>
+<g >
+<title>_int_malloc (312,425,274 samples, 6.86%)</title><rect x="417.4" y="69" width="81.0" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="420.44" y="79.5" >_int_malloc</text>
+</g>
+<g >
+<title>__libc_malloc2 (314,043,093 samples, 6.89%)</title><rect x="572.6" y="69" width="81.3" height="15.0" fill="rgb(218,61,14)" rx="2" ry="2" />
+<text  x="575.61" y="79.5" >__libc_ma..</text>
+</g>
+<g >
+<title>pair&lt;long unsigned int const&amp;, 0&gt; (22,161,604 samples, 0.49%)</title><rect x="498.4" y="101" width="5.7" height="15.0" fill="rgb(243,178,42)" rx="2" ry="2" />
+<text  x="501.36" y="111.5" ></text>
+</g>
+<g >
+<title>operator (22,313,439 samples, 0.49%)</title><rect x="707.0" y="117" width="5.8" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="709.97" y="127.5" ></text>
+</g>
+<g >
+<title>_M_lower_bound (4,463,082 samples, 0.10%)</title><rect x="677.4" y="165" width="1.2" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="680.43" y="175.5" ></text>
+</g>
+<g >
+<title>__libc_malloc (76,495,323 samples, 1.68%)</title><rect x="552.8" y="69" width="19.8" height="15.0" fill="rgb(241,166,39)" rx="2" ry="2" />
+<text  x="555.79" y="79.5" ></text>
+</g>
+<g >
+<title>__libc_malloc2 (4,617,308 samples, 0.10%)</title><rect x="1188.8" y="309" width="1.2" height="15.0" fill="rgb(218,61,14)" rx="2" ry="2" />
+<text  x="1191.80" y="319.5" ></text>
+</g>
+</g>
+</svg>

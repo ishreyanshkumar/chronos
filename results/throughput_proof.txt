@@ -1,0 +1,37 @@
+================================================================
+         CHRONOS — THROUGHPUT PROOF
+         Synthetic Benchmark @ 5,000,000 Orders
+================================================================
+
+----------------------------------------------------------------
+TEST 1: Core Matching Speed  (synth_fast)
+        Logging DISABLED — pure engine throughput, no I/O overhead
+----------------------------------------------------------------
+
+═══════════════════════════════════════════
+  Chronos :: Synthetic Benchmark Results
+═══════════════════════════════════════════
+  Orders processed : 5000000
+  Fills generated  : 2487562
+  Elapsed          : 0.358 s
+  Throughput       : 13.97 M orders/s
+  Avg latency      : 71.6 ns/order
+═══════════════════════════════════════════
+
+
+----------------------------------------------------------------
+TEST 2: End-to-End Pipeline  (synth)
+        Logging ENABLED — matching + concurrent SPSC trade logger
+----------------------------------------------------------------
+
+═══════════════════════════════════════════
+  Chronos :: Synthetic Benchmark Results
+═══════════════════════════════════════════
+  Orders processed : 5000000
+  Fills generated  : 2487562
+  Elapsed          : 0.446 s
+  Throughput       : 11.21 M orders/s
+  Avg latency      : 89.2 ns/order
+  Logger dropped   : 1824882
+═══════════════════════════════════════════
+

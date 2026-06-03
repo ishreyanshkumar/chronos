@@ -54,8 +54,8 @@ public:
             return false;
         }
 
-        out = buf_[t & kMask];
-        tail_.store(t + 1, std::memory_order_release);
+        out = buf_[t];
+        tail_.store((t + 1) & kMask, std::memory_order_release);
         return true;
     }
 

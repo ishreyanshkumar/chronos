@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <string>
 #include <optional>
+#include <filesystem>
 
 static void usage(const char* prog) {
     std::printf(
@@ -36,13 +37,21 @@ static void usage(const char* prog) {
 }
 
 // ── Synthetic benchmark (no file dependency) ──────────────────────────────────
-static void RunSynth(std::size_t n_orders) {
+static void RunSynth(std::size_t n_orders, bool enable_logger) {
     using namespace chronos;
 
-    SPSCLogger logger("trades_synth.csv");
-
     std::size_t fills_total = 0;
-    OrderBook book([&](const Trade& t){ (void)logger.TryLog(t); });
+    std::unique_ptr<SPSCLogger> logger;
+    std::unique_ptr<OrderBook> book;
+    
+    if (enable_logger) {
+        std::filesystem::create_directory("results");
+        logger = std::make_unique<SPSCLogger>("results/trades_synth.csv");
+        SPSCLogger* logger_ptr = logger.get();
+        book = std::make_unique<OrderBook>([logger_ptr](const Trade& t){ (void)logger_ptr->TryLog(t); });
+    } else {
+        book = std::make_unique<OrderBook>([](const Trade& t){});
+    }
 
     const uint64_t t0 = NowNanos();
 
@@ -53,7 +62,7 @@ static void RunSynth(std::size_t n_orders) {
         const Quantity qty  = 100;
         const Side     side = (i % 2 == 0) ? Side::Buy : Side::Sell;
 
-        int f = book.AddOrder(id, side, OrderType::Limit, price, qty, NowNanos());
+        int f = book->AddOrder(id, side, OrderType::Limit, price, qty, NowNanos());
         if (f > 0) fills_total += static_cast<std::size_t>(f);
     }
 
@@ -62,7 +71,9 @@ static void RunSynth(std::size_t n_orders) {
     const double   ops_per_s  = static_cast<double>(n_orders) / elapsed_s;
     const double   ns_per_op  = static_cast<double>(t1 - t0) / static_cast<double>(n_orders);
 
-    logger.Flush();
+    if (logger) {
+        logger->Flush();
+    }
 
     std::printf("\n═══════════════════════════════════════════\n");
     std::printf("  Chronos :: Synthetic Benchmark Results\n");
@@ -72,7 +83,9 @@ static void RunSynth(std::size_t n_orders) {
     std::printf("  Elapsed          : %.3f s\n", elapsed_s);
     std::printf("  Throughput       : %.2f M orders/s\n", ops_per_s / 1e6);
     std::printf("  Avg latency      : %.1f ns/order\n", ns_per_op);
-    std::printf("  Logger dropped   : %lu\n", logger.Dropped());
+    if (logger) {
+        std::printf("  Logger dropped   : %lu\n", logger->Dropped());
+    }
     std::printf("═══════════════════════════════════════════\n\n");
 }
 
@@ -81,7 +94,8 @@ static void RunReplay(const std::string& path,
                       const std::optional<std::string>& symbol_filter) {
     using namespace chronos;
 
-    SPSCLogger logger("trades_replay.csv");
+    std::filesystem::create_directory("results");
+    SPSCLogger logger("results/trades_replay.csv");
 
     std::size_t msg_count  = 0;
     std::size_t add_count  = 0;
@@ -157,7 +171,11 @@ int main(int argc, char* argv[]) {
     if (cmd == "synth") {
         std::size_t n = static_cast<std::size_t>(std::atoll(argv[2]));
         if (n == 0) { std::fprintf(stderr, "Invalid order count\n"); return 1; }
-        RunSynth(n);
+        RunSynth(n, true);
+    } else if (cmd == "synth_fast") {
+        std::size_t n = static_cast<std::size_t>(std::atoll(argv[2]));
+        if (n == 0) { std::fprintf(stderr, "Invalid order count\n"); return 1; }
+        RunSynth(n, false);
     } else if (cmd == "replay") {
         std::string path = argv[2];
         std::optional<std::string> sym;

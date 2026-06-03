@@ -188,6 +188,129 @@ int main() {
 
 using namespace chronos;
 
+// ==========================================
+// BASELINE FOR COMPARISON: NAIVE STL ENGINE
+// ==========================================
+#include <list>
+#include <unordered_map>
+#include <map>
+
+struct STLOrder {
+    uint64_t orderId;
+    uint64_t price;
+    uint32_t quantity;
+    Side side;
+};
+
+class LimitOrderBookSTL {
+private:
+    std::map<uint64_t, std::list<STLOrder>, std::greater<uint64_t>> bids;
+    std::map<uint64_t, std::list<STLOrder>> asks;
+    std::unordered_map<uint64_t, std::list<STLOrder>::iterator> orderMap;
+
+public:
+    int AddOrder(uint64_t orderId, Side side, OrderType type, uint64_t price, uint32_t quantity, uint64_t ts) {
+        int fills = 0;
+        if (side == Side::Buy) {
+            auto it = asks.begin();
+            while (quantity > 0 && it != asks.end() && it->first <= price) {
+                auto& list = it->second;
+                auto listIt = list.begin();
+                while (quantity > 0 && listIt != list.end()) {
+                    uint32_t tradeQty = std::min(quantity, listIt->quantity);
+                    quantity -= tradeQty;
+                    listIt->quantity -= tradeQty;
+                    fills++;
+                    if (listIt->quantity == 0) {
+                        orderMap.erase(listIt->orderId);
+                        listIt = list.erase(listIt);
+                    } else {
+                        ++listIt;
+                    }
+                }
+                if (list.empty()) {
+                    it = asks.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            if (quantity > 0 && type == OrderType::Limit) {
+                bids[price].push_back({orderId, price, quantity, side});
+                orderMap[orderId] = std::prev(bids[price].end());
+            }
+        } else {
+            auto it = bids.begin();
+            while (quantity > 0 && it != bids.end() && it->first >= price) {
+                auto& list = it->second;
+                auto listIt = list.begin();
+                while (quantity > 0 && listIt != list.end()) {
+                    uint32_t tradeQty = std::min(quantity, listIt->quantity);
+                    quantity -= tradeQty;
+                    listIt->quantity -= tradeQty;
+                    fills++;
+                    if (listIt->quantity == 0) {
+                        orderMap.erase(listIt->orderId);
+                        listIt = list.erase(listIt);
+                    } else {
+                        ++listIt;
+                    }
+                }
+                if (list.empty()) {
+                    it = bids.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            if (quantity > 0 && type == OrderType::Limit) {
+                asks[price].push_back({orderId, price, quantity, side});
+                orderMap[orderId] = std::prev(asks[price].end());
+            }
+        }
+        return fills;
+    }
+
+    bool CancelOrder(uint64_t orderId) {
+        auto mapIt = orderMap.find(orderId);
+        if (mapIt == orderMap.end()) return false;
+        
+        auto listIt = mapIt->second;
+        uint64_t price = listIt->price;
+        Side side = listIt->side;
+        
+        if (side == Side::Buy) {
+            auto& list = bids[price];
+            list.erase(listIt);
+            if (list.empty()) bids.erase(price);
+        } else {
+            auto& list = asks[price];
+            list.erase(listIt);
+            if (list.empty()) asks.erase(price);
+        }
+        orderMap.erase(mapIt);
+        return true;
+    }
+};
+
+static void BM_Baseline_STL(benchmark::State& state) {
+    const int N = static_cast<int>(state.range(0));
+    LimitOrderBookSTL book;
+    uint64_t id = 1;
+    for (auto _ : state) {
+        for (int i = 0; i < N; ++i) {
+            benchmark::DoNotOptimize(
+                book.AddOrder(id + i, Side::Buy, OrderType::Limit,
+                              10000 - ((id + i) % 500), 100, 0));
+        }
+        state.PauseTiming();
+        for (int i = 0; i < N; ++i) book.CancelOrder(id + i);
+        state.ResumeTiming();
+        
+        id = (id + N) % 1'000'000 + 1; // Bound ID map size
+    }
+    state.SetItemsProcessed(state.iterations() * N);
+}
+BENCHMARK(BM_Baseline_STL)->Arg(1000)->Arg(10000)->Arg(100000);
+
 static void BM_AddOrderResting(benchmark::State& state) {
     const int N = static_cast<int>(state.range(0));
     OrderBook book;

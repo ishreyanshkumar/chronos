@@ -6,8 +6,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── Release flags ──────────────────────────────────────────────────────────────
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -DNDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -march=native")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -DNDEBUG -g -fno-omit-frame-pointer")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -fno-omit-frame-pointer -march=native")
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
@@ -77,6 +77,11 @@ if(benchmark_FOUND)
   add_executable(bench_engine bench/bench_engine.cpp)
   target_link_libraries(bench_engine PRIVATE chronos_core benchmark::benchmark benchmark::benchmark_main)
   message(STATUS "Google Benchmark found – bench_engine will be built")
+  
+  add_executable(bench_latency bench/bench_engine.cpp)
+  target_link_libraries(bench_latency PRIVATE chronos_core)
+  target_compile_definitions(bench_latency PRIVATE CHRONOS_STANDALONE_BENCH)
+  message(STATUS "Added bench_latency for standalone p50/p90/p99 percentiles")
 else()
   # Fallback: standalone latency benchmark (no external deps)
   add_executable(bench_engine bench/bench_engine.cpp)

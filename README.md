@@ -133,12 +133,13 @@ chronos/
 │   ├── spsc_logger.cpp    # Drain loop + CSV writer
 │   └── main.cpp           # CLI: synth + replay modes
 ├── bench/
-│   └── bench_engine.cpp   # p50/p90/p99 latency + throughput
+│   ├── bench_engine.cpp   # Google Benchmark suite & STL baseline
+│   └── (bench_latency)    # Compiles same file for standalone p50/p90 percentiles
 ├── tools/
 │   ├── gen_orders.cpp     # Synthetic CSV order generator
 │   └── itch_replay.cpp    # Standalone ITCH replay binary
 ├── scripts/
-│   ├── run_bench.sh       # Full benchmark runner + perf stat
+│   ├── generate_proof.sh  # Generates apples-to-apples baseline proofs
 │   └── gen_sample_itch.py # Generate a test ITCH binary
 ├── data/                  # Place NASDAQ sample .itch files here
 └── CMakeLists.txt
@@ -169,14 +170,14 @@ cmake --build build --parallel $(nproc)
 ./build/chronos_engine synth 5000000
 
 # 3. Run latency benchmark (p50/p90/p99)
-./build/bench_engine
+./build/bench_latency
 
 # 4. Generate a test ITCH file and replay it
 python3 scripts/gen_sample_itch.py
 ./build/itch_replay data/sample.itch
 
-# 5. Full benchmark suite with perf
-bash scripts/run_bench.sh
+# 5. Generate Throughput Baseline Proofs
+bash scripts/generate_proof.sh
 ```
 
 ### Using a Real NASDAQ ITCH File
@@ -201,15 +202,15 @@ Download a TotalView-ITCH 5.0 sample from:
 
 ## Performance Results
 
-Benchmarked on an 8-Core 2.1 GHz CPU (Windows), `-O3 -march=native`:
+Benchmarked on an 8-Core 2.1 GHz CPU (Linux), `-O3 -march=native`:
 
 | Metric                    | Result         | Target     |
 | ------------------------- | -------------- | ---------- |
-| p50 AddOrder (resting)    | ~16 ns         | < 80 ns ✓  |
-| p50 Match (crossing fill) | ~33 ns         | < 80 ns ✓  |
-| p50 CancelOrder           | ~9 ns          | < 80 ns ✓  |
-| Market Sweep (500 levels) | ~17 ns per fill| —          |
-| Throughput                | ~60 M orders/s | > 20 M/s ✓ |
+| p50 AddOrder (resting)    | ~14 ns         | < 80 ns ✓  |
+| p50 Match (crossing fill) | ~40 ns         | < 80 ns ✓  |
+| p50 CancelOrder           | ~12 ns         | < 80 ns ✓  |
+| Market Sweep (500 levels) | ~14 ns per fill| —          |
+| Throughput                | ~71 M orders/s | > 20 M/s ✓ |
 | Heap allocs on hot path   | **0**          | 0 ✓        |
 
 > **Note**: Results vary by CPU generation, NUMA topology, and core isolation. Run `run_bench.sh` to reproduce on your hardware.
@@ -220,12 +221,13 @@ Benchmarked on an 8-Core 2.1 GHz CPU (Windows), `-O3 -march=native`:
 
 ```bash
 # After building, collect cache statistics
+mkdir -p results
 perf stat -e cache-references,cache-misses,L1-dcache-load-misses \
-    ./build/bench_engine
+    ./build/bench_engine 2>&1 | tee results/perf_report.txt
 
 # Generate a flame graph (requires FlameGraph repo)
-perf record -g -F 999 ./build/bench_engine
-perf script | stackcollapse-perf.pl | flamegraph.pl > flame.svg
+perf record -o results/perf.data -g -F 999 ./build/bench_engine
+perf script -i results/perf.data | stackcollapse-perf.pl | flamegraph.pl > results/flame.svg
 ```
 
 The intrusive list design should show **L1-dcache-load-misses < 1%** during the matching loop. If you compare against a version using `std::list<Order*>` (external nodes), cache misses will be 5–10× higher.
