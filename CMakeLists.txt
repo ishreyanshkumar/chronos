@@ -47,7 +47,20 @@ add_library(chronos_core STATIC
     src/order_book.cpp
     src/itch_parser.cpp
     src/spsc_logger.cpp
+    src/dpdk_receiver.cpp
 )
+
+option(USE_DPDK "Build with DPDK kernel bypass networking support" OFF)
+if(USE_DPDK)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(DPDK REQUIRED libdpdk)
+    target_compile_definitions(chronos_core PUBLIC USE_DPDK)
+    target_link_libraries(chronos_core PUBLIC ${DPDK_LIBRARIES})
+    target_include_directories(chronos_core PUBLIC ${DPDK_INCLUDE_DIRS})
+    message(STATUS "DPDK Support ENABLED")
+else()
+    message(STATUS "DPDK Support DISABLED (USE_DPDK=OFF)")
+endif()
 target_include_directories(chronos_core PUBLIC include)
 target_link_libraries(chronos_core PUBLIC Threads::Threads)
 
