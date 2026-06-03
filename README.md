@@ -250,4 +250,3 @@ Replace `ITCHParser::ParseFile()` with a DPDK polling loop on an SR-IOV NIC port
 
 ---
 
-_Built by the Systems Programming Club_
