@@ -101,17 +101,6 @@ madvise(raw, file_size, MADV_SEQUENTIAL);  // aggressive readahead
 
 The ITCH binary is read directly from the page cache — no `read()` syscall copies bytes into a userspace buffer. `MADV_SEQUENTIAL` tells the kernel to prefetch future pages while the parser processes current ones.
 
-### 5. Kernel Bypass (Extension Path)
-
-For production deployment, replace the ITCH file reader with a **DPDK** or **OpenOnload** integration:
-
-```cpp
-// Instead of mmap(file):
-//   rte_mbuf* pkt = rte_eth_rx_burst(...);  // DPDK zero-copy from NIC
-```
-
-This eliminates the Linux network stack entirely — packets go directly from the NIC DMA buffer to the parser, shaving ~5–10 µs of kernel overhead per packet.
-
 ---
 
 ## Project Structure
@@ -233,20 +222,3 @@ perf script -i results/perf.data | stackcollapse-perf.pl | flamegraph.pl > resul
 The intrusive list design should show **L1-dcache-load-misses < 1%** during the matching loop. If you compare against a version using `std::list<Order*>` (external nodes), cache misses will be 5–10× higher.
 
 ---
-
-## Extension: Kernel Bypass with DPDK
-
-```bash
-# Install DPDK (Ubuntu)
-sudo apt-get install dpdk dpdk-dev
-
-# In CMakeLists.txt, add:
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(DPDK REQUIRED libdpdk)
-target_link_libraries(chronos_engine PRIVATE ${DPDK_LIBRARIES})
-```
-
-Replace `ITCHParser::ParseFile()` with a DPDK polling loop on an SR-IOV NIC port. This eliminates the Linux kernel network stack entirely — the CPU reads packets directly from NIC DMA memory.
-
----
-

@@ -3,7 +3,7 @@
 //
 // Wires together the three-core architecture:
 //
-//   Core 0  – Market-data ingestion  (ITCH file reader or live NIC via DPDK)
+//   Core 0  – Market-data ingestion (ITCH file reader)
 //   Core 1  – Matching engine        (OrderBook hot path)
 //   Core 2  – Trade logger           (SPSCLogger drain thread)
 //
