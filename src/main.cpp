@@ -11,10 +11,7 @@
 // caller's thread (no network latency to hide); for a live deployment you would
 // separate ingestion onto its own pinned thread feeding the SPSC queue.
 // ─────────────────────────────────────────────────────────────────────────────
-#include "order_book.hpp"
-#include "itch_parser.hpp"
-#include "spsc_logger.hpp"
-#include "cpu_utils.hpp"
+#include "chronos.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -156,8 +153,8 @@ static void RunReplay(const std::string& path,
                     static_cast<double>(add_count) / elapsed_s / 1e6);
     auto bid = book.BestBid();
     auto ask = book.BestAsk();
-    if (bid) std::printf("  Best Bid         : %.4f\n", static_cast<double>(*bid) / 10000.0);
-    if (ask) std::printf("  Best Ask         : %.4f\n", static_cast<double>(*ask) / 10000.0);
+    if (bid != -1) std::printf("  Best Bid         : %.4f\n", static_cast<double>(bid) / 10000.0);
+    if (ask != -1) std::printf("  Best Ask         : %.4f\n", static_cast<double>(ask) / 10000.0);
     std::printf("  Logger dropped   : %lu\n", logger.Dropped());
     std::printf("═══════════════════════════════════════════\n\n");
 }

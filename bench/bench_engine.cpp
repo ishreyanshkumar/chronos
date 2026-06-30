@@ -10,10 +10,7 @@
 //   CHRONOS_STANDALONE_BENCH – uses a built-in stat library (no external deps)
 //   default                   – uses Google Benchmark
 // ─────────────────────────────────────────────────────────────────────────────
-#include "order_book.hpp"
-#include "cpu_utils.hpp"
-#include "memory_arena.hpp"
-#include "spsc_ring.hpp"
+#include "chronos.hpp"
 
 #include <algorithm>
 #include <cstdio>

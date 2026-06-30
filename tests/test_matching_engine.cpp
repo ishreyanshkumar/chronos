@@ -1,10 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
-#include "memory_arena.hpp"
-#include "order_book.hpp"
-#include "price_level.hpp"
-#include "spsc_ring.hpp"
+#include "chronos.hpp"
 #include <vector>
 
 using namespace chronos;
@@ -40,11 +37,11 @@ TEST_CASE("Resting order tracks best bid/ask", "[lob]") {
     OrderBook book;
     book.AddOrder(1, Side::Buy, OrderType::Limit, 9990, 100, 0);
     book.AddOrder(2, Side::Buy, OrderType::Limit, 9995, 100, 0);
-    REQUIRE(book.BestBid().value_or(0) == 9995);
+    REQUIRE(book.BestBid() == 9995);
 
     book.AddOrder(3, Side::Sell, OrderType::Limit, 10010, 100, 0);
     book.AddOrder(4, Side::Sell, OrderType::Limit, 10005, 100, 0);
-    REQUIRE(book.BestAsk().value_or(0) == 10005);
+    REQUIRE(book.BestAsk() == 10005);
 }
 
 TEST_CASE("Full fill — resting order consumed", "[lob]") {
@@ -69,7 +66,7 @@ TEST_CASE("Partial fill — remainder rests in book", "[lob]") {
     REQUIRE(trades.size() == 1);
     REQUIRE(trades[0].quantity == 50);
     REQUIRE(book.OrderCount() == 1);
-    REQUIRE(book.BestBid().value_or(0) == 10000);
+    REQUIRE(book.BestBid() == 10000);
 }
 
 TEST_CASE("Aggressive order sweeps multiple price levels", "[lob]") {
@@ -103,9 +100,9 @@ TEST_CASE("Cancel removes order and recalculates best", "[lob]") {
     book.AddOrder(1, Side::Buy, OrderType::Limit, 9990, 100, 0);
     book.AddOrder(2, Side::Buy, OrderType::Limit, 9995, 100, 0);
 
-    REQUIRE(book.BestBid().value_or(0) == 9995);
+    REQUIRE(book.BestBid() == 9995);
     book.CancelOrder(2);
-    REQUIRE(book.BestBid().value_or(0) == 9990);
+    REQUIRE(book.BestBid() == 9990);
     REQUIRE(book.OrderCount() == 1);
 }
 

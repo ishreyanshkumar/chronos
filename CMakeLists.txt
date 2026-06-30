@@ -39,10 +39,7 @@ include_directories(include)
 
 # ── Core library (header-only logic compiled into a thin object lib) ──────────
 add_library(chronos_core STATIC
-    src/memory_arena.cpp
-    src/order_book.cpp
-    src/itch_parser.cpp
-    src/spsc_logger.cpp
+    src/chronos.cpp
 )
 target_include_directories(chronos_core PUBLIC include)
 target_link_libraries(chronos_core PUBLIC Threads::Threads)

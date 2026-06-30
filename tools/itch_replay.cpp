@@ -5,10 +5,7 @@
 // Reads a binary ITCH file and feeds it through the matching engine,
 // printing top-of-book updates and fill statistics.
 // ─────────────────────────────────────────────────────────────────────────────
-#include "order_book.hpp"
-#include "itch_parser.hpp"
-#include "spsc_logger.hpp"
-#include "cpu_utils.hpp"
+#include "chronos.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -87,8 +84,8 @@ int main(int argc, char* argv[]) {
 
     auto bid = book.BestBid();
     auto ask = book.BestAsk();
-    if (bid) std::printf("Best Bid: $%.4f\n", static_cast<double>(*bid) / 10000.0);
-    if (ask) std::printf("Best Ask: $%.4f\n", static_cast<double>(*ask) / 10000.0);
+    if (bid != -1) std::printf("Best Bid: $%.4f\n", static_cast<double>(bid) / 10000.0);
+    if (ask != -1) std::printf("Best Ask: $%.4f\n", static_cast<double>(ask) / 10000.0);
 
     return 0;
     } catch (const std::exception& e) {
