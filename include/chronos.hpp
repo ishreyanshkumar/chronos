@@ -22,8 +22,14 @@ using Quantity = uint32_t;
 using OrderId = uint64_t;
 using Nanos = uint64_t;
 
+// ── Core Data Structures ───────────────────────────────────────────────────────
+
+// kMarketPrice is used to denote an aggressive market order that sweeps the book
 static constexpr Price kMarketPrice = 0;
 
+// The Order struct is perfectly aligned to exactly 64 bytes. 
+// This ensures it fits perfectly into a single L1 CPU cache line, preventing 
+// the CPU from having to fetch multiple cache lines to read a single order.
 struct alignas(64) Order {
     OrderId id;
     Price price;
@@ -31,11 +37,14 @@ struct alignas(64) Order {
     Quantity filled;
     Side side;
     OrderType type;
-    uint8_t _pad[2];
+    uint8_t _pad[2]; // Padding to align perfectly to 64 bytes
 
+    // Intrusive linked list pointers. 
+    // By keeping prev/next inside the order data, we eliminate cache misses 
+    // that would occur if we used a separate Node struct (like std::list does).
     Order* prev;
     Order* next;
-    Nanos ts_ns;
+    Nanos ts_ns; // Timestamp of order arrival for price-time priority
 
     Quantity Remaining() const { return quantity - filled; }
     bool IsFilled() const { return filled >= quantity; }
@@ -49,6 +58,11 @@ struct Trade {
     Nanos ts_ns;
 };
 
+// ── Pre-faulted Memory Arena ─────────────────────────────────────────────────
+
+// A zero-allocation memory arena. Instead of calling malloc() or new on the hot path,
+// we pre-allocate all orders upfront in a giant array (pool_) and link them together 
+// into a free-list. Allocating an order takes O(1) time (a single pointer chase).
 template<typename T, std::size_t Capacity>
 class MemoryArena {
 public:
@@ -61,6 +75,7 @@ public:
         free_head_ = &pool_[0];
     }
 
+    // Grab the first available object from the free-list. No OS involvement.
     T* Alloc() {
         if (!free_head_) return nullptr;
         T* slot = free_head_;
@@ -71,6 +86,7 @@ public:
         return slot;
     }
 
+    // Return an object to the free-list instantly.
     void Free(T* ptr) {
         ptr->next = free_head_;
         ptr->prev = nullptr;
@@ -86,8 +102,13 @@ private:
     std::size_t live_count_ = 0;
 };
 
+// ── Price Level Management ───────────────────────────────────────────────────
+
+// Represents a single price point in the order book. Contains a doubly-linked 
+// FIFO queue of resting orders to enforce Price-Time Priority.
 class PriceLevel {
 public:
+    // Append to the back of the queue (O(1) complexity)
     void PushBack(Order* o) {
         o->prev = tail_;
         o->next = nullptr;
@@ -97,6 +118,8 @@ public:
         total_qty_ += o->Remaining();
     }
 
+    // Unlink an order instantly. Because the order has `prev` and `next` pointers,
+    // we can remove it in O(1) time without having to traverse the list.
     void Unlink(Order* o) {
         if (o->prev) o->prev->next = o->next;
         else head_ = o->next;
@@ -121,6 +144,10 @@ private:
 
 using TradeCallback = std::function<void(const Trade&)>;
 
+// ── Matching Engine Core ─────────────────────────────────────────────────────
+
+// The main OrderBook. It maintains vectors for bids and asks, providing O(1) 
+// random access to any price level to prevent Red-Black tree (std::map) overhead.
 class OrderBook {
 public:
     explicit OrderBook(TradeCallback cb = nullptr);
@@ -141,9 +168,12 @@ private:
     void RecalcBestBid() const;
     void RecalcBestAsk() const;
 
+    // Use dense vectors (arrays) rather than maps for instant O(1) price lookups
     static constexpr std::size_t kMaxPriceTicks = 2000000;
     std::vector<PriceLevel> bids_;
     std::vector<PriceLevel> asks_;
+    
+    // Direct pointer mapping from OrderId to memory arena object for O(1) cancels
     std::vector<Order*> id_map_;
 
     MemoryArena<Order, 1 << 22> arena_;
@@ -156,6 +186,11 @@ private:
     std::size_t active_orders_ = 0;
 };
 
+// ── Thread Isolation Queue ───────────────────────────────────────────────────
+
+// A wait-free, lock-free Single-Producer Single-Consumer ring buffer.
+// Used to pass data between the Network core and the Matching Engine core 
+// without mutexes or context switches.
 template<typename T, std::size_t N>
 class SPSCRing {
     static_assert((N & (N - 1)) == 0, "N must be a power of two");
@@ -188,6 +223,9 @@ public:
     }
 
 private:
+    // Pad the head_ and tail_ atomics to 64 bytes so they sit on separate 
+    // cache lines. This completely eliminates False Sharing, allowing 
+    // both cores to spin on their respective variables without cache invalidation.
     alignas(64) std::atomic<std::size_t> head_ {0};
     std::size_t _pad0[kPad] {};
     alignas(64) std::atomic<std::size_t> tail_ {0};
@@ -237,8 +275,12 @@ struct ITCHCallbacks {
     std::function<void(const MsgReplaced&)> on_replaced;
 };
 
+// ── ITCH Network Protocol Parsing ────────────────────────────────────────────
+
+// A zero-copy ITCH 5.0 protocol parser. 
 class ITCHParser {
 public:
+    // Parses a file via mmap, completely bypassing kernel space copies
     std::size_t ParseFile(const std::string& path, const ITCHCallbacks& cbs);
     static std::size_t ParseMessage(const uint8_t* buf, std::size_t len, const ITCHCallbacks& cbs);
 };

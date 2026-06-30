@@ -35,6 +35,7 @@ void OrderBook::RecalcBestAsk() const {
 }
 
 int OrderBook::AddOrder(OrderId id, Side side, OrderType type, Price price, Quantity qty, Nanos ts) {
+    // 1. O(1) Zero-allocation fetch from the pre-faulted memory arena
     Order* o = arena_.Alloc();
     if (!o) return -1;
 
@@ -56,22 +57,26 @@ int OrderBook::AddOrder(OrderId id, Side side, OrderType type, Price price, Quan
 
     ++active_orders_;
 
+    // 2. Direct-mapped array lookup for O(1) order cancellation by ID
     if (id >= id_map_.size()) {
         id_map_.resize(std::max(id_map_.size() * 2, static_cast<size_t>(id + 1000)), nullptr);
     }
     id_map_[id] = o;
 
+    // 3. Attempt to match immediately against resting liquidity
     int fills = Match(o);
 
+    // 4. If the limit order didn't completely fill, it becomes a "Resting" order
     if (!o->IsFilled() && type == OrderType::Limit) {
         if (side == Side::Buy) {
-            bids_[price].PushBack(o);
+            bids_[price].PushBack(o); // O(1) intrusive list insert
             if (best_bid_ == -1 || price > best_bid_) best_bid_ = price;
         } else {
-            asks_[price].PushBack(o);
+            asks_[price].PushBack(o); // O(1) intrusive list insert
             if (best_ask_ == -1 || price < best_ask_) best_ask_ = price;
         }
     } else if (o->IsFilled() || type == OrderType::Market) {
+        // If it's a market order or it completely filled, it never rests. Clean it up.
         id_map_[id] = nullptr;
         arena_.Free(o);
         --active_orders_;
@@ -82,9 +87,14 @@ int OrderBook::AddOrder(OrderId id, Side side, OrderType type, Price price, Quan
 
 bool OrderBook::CancelOrder(OrderId id) {
     if (id >= id_map_.size()) return false;
+    
+    // 1. O(1) fetch via the direct mapped array
     Order* o = id_map_[id];
     if (!o) return false;
 
+    // 2. Unlink from the intrusive list. 
+    // Because the order has `prev` and `next` pointers within its own cache line, 
+    // this operates in strict O(1) time without requiring a list traversal.
     if (o->side == Side::Buy) {
         bids_[o->price].Unlink(o);
         if (best_bid_ != -1 && o->price == best_bid_ && bids_[o->price].Empty()) {
@@ -116,13 +126,16 @@ Price OrderBook::BestAsk() const {
 int OrderBook::Match(Order* incoming) {
     int fills = 0;
 
+    // Process a Buy order sweeping through the Asks
     if (incoming->side == Side::Buy) {
         while (!incoming->IsFilled() && best_ask_ != -1) {
             Price ask_price = best_ask_;
             if (incoming->type == OrderType::Limit && incoming->price < ask_price)
-                break;
+                break; // Prices do not overlap
 
             PriceLevel& level = asks_[ask_price];
+            
+            // Start at the Head to guarantee strict Price-Time priority
             Order* cur = level.Head();
             while (cur && !incoming->IsFilled()) {
                 Order* passive = cur;
@@ -301,10 +314,14 @@ std::size_t ITCHParser::ParseFile(const std::string& path, const ITCHCallbacks& 
 
     if (file_size == 0) { ::close(fd); return 0; }
 
+    // mmap maps the file directly into our virtual memory space, bypassing the 
+    // standard kernel space-to-userspace copying overhead of read().
     void* raw = ::mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
     ::close(fd);
     if (raw == MAP_FAILED) throw std::runtime_error("mmap failed for: " + path);
 
+    // Provide a hint to the Linux Kernel to aggressively pre-fetch upcoming pages 
+    // from the SSD into RAM, effectively hiding I/O latency.
     ::madvise(raw, file_size, MADV_SEQUENTIAL);
 
     const auto* buf = reinterpret_cast<const uint8_t*>(raw);
